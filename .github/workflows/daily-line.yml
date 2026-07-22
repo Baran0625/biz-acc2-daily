@@ -1,0 +1,31 @@
+# GASの代わりにGitHub Actionsで毎朝LINE配信する場合の設定（任意）。
+# GAS(gas/Code.gs)を使うなら、このワークフローは不要です（どちらか一方でOK）。
+#
+# 使い方:
+#   リポジトリの Settings → Secrets and variables → Actions で以下を登録
+#     LINE_TOKEN : チャネルアクセストークン（長期）
+#     USER_ID    : 自分の user ID（Uから始まる）
+#     QUIZ_URL   : 2級アプリの公開URL（GitHub Pages）
+name: daily-line
+
+on:
+  schedule:
+    - cron: '0 23 * * *'   # UTC 23:00 = JST 08:00
+  workflow_dispatch:        # 手動実行でテストも可能
+
+jobs:
+  push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Push LINE message
+        env:
+          LINE_TOKEN: ${{ secrets.LINE_TOKEN }}
+          USER_ID: ${{ secrets.USER_ID }}
+          QUIZ_URL: ${{ secrets.QUIZ_URL }}
+        run: |
+          TODAY=$(TZ=Asia/Tokyo date '+%-m月%-d日')
+          MSG="おはようございます☀️\n${TODAY} のビジネス会計検定2級 40問です。\n9章からランダム出題、朝の1回でサクッと。\n\n▶ ${QUIZ_URL}"
+          curl -s -X POST https://api.line.me/v2/bot/message/push \
+            -H "Authorization: Bearer ${LINE_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "{\"to\":\"${USER_ID}\",\"messages\":[{\"type\":\"text\",\"text\":\"${MSG}\"}]}"
