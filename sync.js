@@ -12,7 +12,7 @@
    - 読み込み(loadAll)は JSONP（<script>タグ）でクロスオリジン制約を回避。
    ============================================================= */
 
-window.SYNC_URL = ""; // 例: https://script.google.com/macros/s/XXXXXXXX/exec
+window.SYNC_URL = "https://script.google.com/macros/s/AKfycbwo09yR4W0DIPKtHVoXEpByBwGXZoNvS7tlx2mNiS1PaV30MkCbjDA8nMt8a-xmNBNg/exec";
 
 window.Sync = {
   enabled: function(){ return !!window.SYNC_URL; },
