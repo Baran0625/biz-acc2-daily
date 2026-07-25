@@ -52,13 +52,28 @@ if(!SECTIONS || !QUESTIONS){
 
 /* ===== 日付シード付き乱数 ===== */
 function mulberry32(a){ return function(){ a|=0; a=a+0x6D2B79F5|0; let t=Math.imul(a^a>>>15,1|a); t=t+Math.imul(t^t>>>7,61|t)^t; return((t^t>>>14)>>>0)/4294967296; }; }
-function shuffle(arr,rng){ for(let i=arr.length-1;i>0;i--){ const j=Math.floor(rng()*(i+1)); [arr[i],arr[j]]=[arr[j],arr[i]]; } return arr; }
-/* その日付の40問を全問プールから決定的に選ぶ（同じ日は同じ／日が変わると変わる）。
-   章の問題数に応じて自然に重み付けされる。 */
-function dailySet(dateKey){
+/* ソフト優先（出題回数が少ない問題ほど選ばれやすい）加重サンプリング。
+   各問題の重み = 1/(shown+1)。key = rng()^(1/weight) を計算し、keyの大きい順に上位N問を選ぶ
+   （A-ESアルゴリズム）。日付シードのrngを使うため、同じdateKey・同じshownMapなら常に同じ結果。 */
+function pickWeighted(dateKey,shownMap){
   const base=parseInt(dateKey.replace(/-/g,""),10);
   const rng=mulberry32(base+2626);
-  return shuffle(QUESTIONS.slice(),rng).slice(0,Math.min(DAILY_N,QUESTIONS.length));
+  const n=Math.min(DAILY_N,QUESTIONS.length);
+  const keyed=QUESTIONS.map(q=>{
+    const shown=(shownMap&&shownMap[q.id])||0;
+    const weight=1/(shown+1);
+    return { q, key:Math.pow(rng(),1/weight) };
+  });
+  keyed.sort((a,b)=>b.key-a.key);
+  return keyed.slice(0,n).map(k=>k.q);
+}
+/* その日付の40問を全問プールから決定的に選ぶ（同じ日・同じshownMapなら同じ／日か出題回数が変わると変わる）。 */
+function dailySet(dateKey,shownMap){
+  return pickWeighted(dateKey,shownMap||{});
+}
+/* 記録済みの1日分（rows）から、実際に出題されたのと同じ問題配列を復元する（再抽選しない）。 */
+function setFromRows(rows){
+  return rows.map(r=>QUESTIONS.find(q=>q.id===r.id));
 }
 
 /* ===== 保存（localStorage、無理ならメモリ） ===== */
@@ -102,6 +117,7 @@ function ring(pct,size=132,stroke=12,color){
 
 /* ===== 状態 ===== */
 let state={ view:"home", idx:0, answers:[], set:[], session:null };
+let shownMap={}; /* id -> 出題回数。未取得の間は全問0扱い（Sync.loadStatsで更新） */
 
 function computeSession(dateKey,set,answers){
   const rows=set.map((q,i)=>({ id:q.id, section:q.section, chosen:answers[i], correct:answers[i]===q.answer }));
@@ -235,25 +251,33 @@ function handleClick(e){
   }
   if(t.dataset.detail){
     const key=t.dataset.detail, rec=hist.find(h=>h.dateKey===key);
-    state.set=dailySet(key); state.answers=state.set.map((q,i)=>rec?rec.rows[i].chosen:null);
+    state.set=rec?setFromRows(rec.rows):dailySet(key,shownMap); state.answers=state.set.map((q,i)=>rec?rec.rows[i].chosen:null);
     state.session=rec||computeSession(key,state.set,state.answers); state.view="detail"; render(); return;
   }
   const act=t.dataset.act;
   if(act==="history"){ state.view="history"; render(); }
   else if(act==="home"){ state.view="home"; render(); }
-  else if(act==="start"){ const tk=todayKey(); state.set=dailySet(tk); state.answers=Array(state.set.length).fill(null); state.idx=0; state.view="quiz"; render(); }
-  else if(act==="showtoday"){ const tk=todayKey(),rec=hist.find(h=>h.dateKey===tk); state.set=dailySet(tk); state.answers=rec?rec.rows.map(r=>r.chosen):state.set.map(()=>null); state.session=rec||computeSession(tk,state.set,state.answers); state.view="result"; render(); }
+  else if(act==="start"){ const tk=todayKey(); state.set=dailySet(tk,shownMap); state.answers=Array(state.set.length).fill(null); state.idx=0; state.view="quiz"; render(); }
+  else if(act==="showtoday"){ const tk=todayKey(),rec=hist.find(h=>h.dateKey===tk); state.set=rec?setFromRows(rec.rows):dailySet(tk,shownMap); state.answers=rec?rec.rows.map(r=>r.chosen):state.set.map(()=>null); state.session=rec||computeSession(tk,state.set,state.answers); state.view="result"; render(); }
   else if(act==="next"){ state.idx++; render(); }
   else if(act==="prev"){ state.idx--; render(); }
   else if(act==="grade"){ const tk=todayKey(),s=computeSession(tk,state.set,state.answers); putHistory([s,...hist.filter(h=>h.dateKey!==tk)]); if(window.Sync) Sync.save(s); state.session=s; state.view="result"; render(); }
 }
 
 document.getElementById("app").addEventListener("click",handleClick);
-render(); // まずローカルの記録で即描画
+render(); // まずローカルの記録で即描画（shownMapが空でも動く＝実質ランダム）
 // スプレッドシートに記録があれば取り込んで再描画（オフライン・未設定時は何もしない）
 if(window.Sync && Sync.enabled()){
   Sync.loadAll().then(remote=>{
     if(remote && remote.length){ putHistory(mergeHistories(getHistory(),remote)); render(); }
+  });
+  // 出題回数の統計を取得してshownMapを更新。本日分を解答済みならその日のセットは変えない（再抽選しない）
+  Sync.loadStats().then(stats=>{
+    if(!stats || !stats.length) return;
+    const map={}; stats.forEach(s=>{ if(s && s.id) map[s.id]=Number(s.shown)||0; });
+    shownMap=map;
+    const tk=todayKey(), doneToday=getHistory().some(h=>h.dateKey===tk);
+    if(!doneToday) render();
   });
 }
 </script>

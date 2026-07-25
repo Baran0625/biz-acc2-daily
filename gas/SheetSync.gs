@@ -3,6 +3,8 @@
  * -------------------------------------------------------------
  * doPost : 1日分の結果を upsert（同じ日付があれば上書き、なければ追加＝1日1行）
  * doGet  : 全記録を JSONP（?callback=xxx）または JSON で返す
+ *          ?mode=stats を付けると、全記録のrowsを集計した [{id,shown}] を返す
+ *          （出題ソフト優先ロジックのための出題回数統計。shown=0の問題は含まれない）
  *
  * 【セットアップ】
  * 1. 新しいGoogleスプレッドシートを作成（FP3級とは別のシートにする）
@@ -52,6 +54,17 @@ function doPost(e) {
 function doGet(e) {
   const sh = getSheet_();
   const values = sh.getDataRange().getValues();
+  const mode = e && e.parameter && e.parameter.mode;
+  const body = JSON.stringify(mode === 'stats' ? collectStats_(values) : collectRecords_(values));
+  const cb = e && e.parameter && e.parameter.callback;
+  if (cb) {
+    return ContentService.createTextOutput(cb + '(' + body + ')')
+      .setMimeType(ContentService.MimeType.JAVASCRIPT);
+  }
+  return ContentService.createTextOutput(body).setMimeType(ContentService.MimeType.JSON);
+}
+
+function collectRecords_(values) {
   const out = [];
   for (let i = 1; i < values.length; i++) {
     const r = values[i];
@@ -66,13 +79,22 @@ function doGet(e) {
       rows: safeParse_(r[6], [])
     });
   }
-  const body = JSON.stringify(out);
-  const cb = e && e.parameter && e.parameter.callback;
-  if (cb) {
-    return ContentService.createTextOutput(cb + '(' + body + ')')
-      .setMimeType(ContentService.MimeType.JAVASCRIPT);
+  return out;
+}
+
+// 全記録のrowsを走査し、問題ID別の出題回数を集計する（ソフト優先出題の重み計算に使用）
+function collectStats_(values) {
+  const counts = {};
+  for (let i = 1; i < values.length; i++) {
+    const r = values[i];
+    if (!r[0]) continue;
+    const rows = safeParse_(r[6], []);
+    rows.forEach(function (row) {
+      if (!row || !row.id) return;
+      counts[row.id] = (counts[row.id] || 0) + 1;
+    });
   }
-  return ContentService.createTextOutput(body).setMimeType(ContentService.MimeType.JSON);
+  return Object.keys(counts).map(function (id) { return { id: id, shown: counts[id] }; });
 }
 
 function safeParse_(s, dflt) { try { return JSON.parse(s); } catch (err) { return dflt; } }

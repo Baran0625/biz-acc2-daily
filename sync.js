@@ -48,5 +48,27 @@ window.Sync = {
       s.src = window.SYNC_URL + "?callback=" + cb + "&t=" + Date.now();
       document.body.appendChild(s);
     });
+  },
+
+  // 問題ごとの出題回数 [{id,shown}] をJSONPで取得。8秒でタイムアウトして空配列を返す
+  loadStats: function(){
+    return new Promise(function(resolve){
+      if(!window.SYNC_URL){ resolve([]); return; }
+      var cb = "__ba2st_" + Date.now();
+      var s = document.createElement("script");
+      var done = false;
+      var timer = setTimeout(function(){ finish([]); }, 8000);
+      function finish(data){
+        if(done) return; done = true;
+        clearTimeout(timer);
+        try { delete window[cb]; } catch(e) { window[cb] = undefined; }
+        if(s.parentNode) s.parentNode.removeChild(s);
+        resolve(Array.isArray(data) ? data : []);
+      }
+      window[cb] = function(data){ finish(data); };
+      s.onerror = function(){ finish([]); };
+      s.src = window.SYNC_URL + "?mode=stats&callback=" + cb + "&t=" + Date.now();
+      document.body.appendChild(s);
+    });
   }
 };
